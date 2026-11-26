@@ -1,0 +1,20 @@
+{
+  "name": "firefly-meadow",
+  "version": "1.0.0",
+  "description": "A magical pixel-art GitHub contribution graph with glowing flowers, wandering fireflies and a blue butterfly.",
+  "type": "module",
+  "private": false,
+  "scripts": {
+    "generate": "node src/generate-meadow.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "github",
+    "contribution-graph",
+    "pixel-art",
+    "svg",
+    "fireflies"
+  ],
+  "author": "Mahima Parekh",
+  "license": "MIT"
+}
