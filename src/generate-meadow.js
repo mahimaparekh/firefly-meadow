@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { SPRITES, PALETTES, BUD, LEAVES } from "./sprites.js";
 import { renderFireflies } from "./fireflies.js";
 import { renderButterfly } from "./butterfly.js";
+import { fetchContributions } from "./fetch-contributions.js";
 import {
   motionCss,
   swayGroupFor,
@@ -157,6 +158,16 @@ function placeCell(layers, col, row, level) {
   );
 }
 
+// A cell can be a plain count (sample data), an {level} object from the GitHub
+// API, or null (a day outside the calendar window, drawn as nothing).
+export function resolveLevel(cell) {
+  if (cell === null || cell === undefined) return null;
+  if (typeof cell === "number") return getContributionLevel(cell);
+  if (Number.isInteger(cell.level) && cell.level >= 0 && cell.level <= 4)
+    return cell.level;
+  throw new Error("Invalid contribution cell");
+}
+
 export function getContributionLevel(count) {
   if (count === 0) return 0;
   if (count <= 3) return 1;
@@ -183,9 +194,10 @@ export function generateSampleContributions() {
 export function generateMeadowSVG(contributions) {
   const layers = createLayers();
   contributions.forEach((week, col) =>
-    week.forEach((n, row) =>
-      placeCell(layers, col, row, getContributionLevel(n)),
-    ),
+    week.forEach((cell, row) => {
+      const level = resolveLevel(cell);
+      if (level !== null) placeCell(layers, col, row, level);
+    }),
   );
   const cells = [
     ...layers.halos.map((g, i) => `<g class="pl${i}">${g.join("")}</g>`),
@@ -226,7 +238,33 @@ const isMain =
   process.argv[1] &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const svg = generateMeadowSVG(generateSampleContributions());
+  let contributions;
+
+  if (process.argv.includes("--live")) {
+    // Live mode: on any failure, exit with an error and leave the existing SVG untouched.
+    const login = process.env.MEADOW_GITHUB_USER || "mahimaparekh";
+    try {
+      const result = await fetchContributions({
+        token: process.env.CONTRIBUTIONS_TOKEN,
+        login,
+      });
+      result.warnings.forEach((w) => console.warn(`Warning: ${w}`));
+      contributions = result.grid;
+      console.log(
+        `Fetched ${contributions.length} weeks of contributions for ${login}`,
+      );
+    } catch (error) {
+      console.error(`Could not fetch contributions: ${error.message}`);
+      process.exit(1);
+    }
+  } else {
+    contributions = generateSampleContributions();
+    console.log(
+      "Using sample data (run `npm run generate:live` for real contributions)",
+    );
+  }
+
+  const svg = generateMeadowSVG(contributions);
   const outDir = path.join(projectRoot, "dist");
   fs.mkdirSync(outDir, { recursive: true });
   const outputPath = path.join(outDir, "meadow.svg");

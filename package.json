@@ -6,6 +6,7 @@
   "private": false,
   "scripts": {
     "generate": "node src/generate-meadow.js",
+    "generate:live": "node --env-file-if-exists=.env src/generate-meadow.js --live",
     "test": "node --test"
   },
   "keywords": [
