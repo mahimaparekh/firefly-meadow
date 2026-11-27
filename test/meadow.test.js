@@ -79,3 +79,110 @@ test("fireflies have different speeds and are not in sync", () => {
 test("reduced-motion preference disables animation", () => {
   assert.match(renderFireflies(FF_OPTS).css, /prefers-reduced-motion:reduce/);
 });
+
+import {
+  renderButterfly,
+  WING,
+  LOOP_SECONDS,
+  PASS_STARTS,
+  buildButterflySVG,
+} from "../src/butterfly.js";
+
+test("butterfly is deterministic and visits from alternating sides", () => {
+  const a = renderButterfly(FF_OPTS);
+  const b = renderButterfly(FF_OPTS);
+  assert.equal(a.css, b.css);
+  assert.equal(a.svg, b.svg);
+  const [left, right] = a.passes;
+  assert.ok(left.samples[0][1] < 0 && left.samples.at(-1)[1] > FF_OPTS.width);
+  assert.ok(right.samples[0][1] > FF_OPTS.width && right.samples.at(-1)[1] < 0);
+});
+
+test("butterfly is only visible occasionally and hovers mid-flight", () => {
+  const { passes } = renderButterfly(FF_OPTS);
+  const visible = passes.reduce((sum, p) => sum + p.total, 0);
+  assert.ok(visible / LOOP_SECONDS < 0.3);
+  for (const [i, p] of passes.entries()) {
+    assert.ok(PASS_STARTS[i] + p.total < (PASS_STARTS[i + 1] ?? LOOP_SECONDS));
+    // Hover = a stretch of >= 2s where it barely moves horizontally.
+    const slow = p.samples.filter(
+      (s, k) => k > 0 && Math.abs(s[1] - p.samples[k - 1][1]) < 4,
+    );
+    assert.ok(slow.length * 0.6 >= 2);
+  }
+});
+
+test("butterfly keyframes are ordered and stay inside the meadow vertically", () => {
+  const { css, bounds, passes } = renderButterfly(FF_OPTS);
+  const pcts = [...css.matchAll(/([\d.]+)%\{transform:translate\(/g)].map((m) =>
+    Number(m[1]),
+  );
+  assert.equal(pcts[0], 0);
+  assert.equal(pcts.at(-1), 100);
+  assert.ok(pcts.every((v, i) => i === 0 || v >= pcts[i - 1]));
+  for (const p of passes)
+    for (const [, , y] of p.samples)
+      assert.ok(y >= bounds.minY && y <= bounds.maxY);
+});
+
+test("butterfly starts hidden and disappears under reduced motion", () => {
+  const { svg, css } = renderButterfly(FF_OPTS);
+  assert.match(svg, /opacity="0"/);
+  assert.match(
+    css,
+    /prefers-reduced-motion:reduce\)\{\.bf,\.bf-flap,\.bf-flutter\{animation:none\}\.bf\{opacity:0\}/,
+  );
+});
+
+test("butterfly sprite wing is rectangular and symmetric output renders", () => {
+  assert.ok(WING.every((r) => r.length === WING[0].length));
+  assert.match(buildButterflySVG(), /bf-flap/);
+});
+
+import {
+  swayGroupFor,
+  pulseGroupFor,
+  SWAY_GROUPS,
+  PULSE_GROUPS,
+  motionCss,
+} from "../src/flower-motion.js";
+
+test("flower group assignment is deterministic and spreads flowers out", () => {
+  const counts = Array(SWAY_GROUPS).fill(0);
+  for (let c = 0; c < 53; c++) {
+    for (let r = 0; r < 7; r++) {
+      assert.equal(swayGroupFor(c, r), swayGroupFor(c, r));
+      assert.ok(pulseGroupFor(c, r) < PULSE_GROUPS);
+      counts[swayGroupFor(c, r)]++;
+    }
+  }
+  // Every group is used and none dominates (371 cells / 5 groups ~ 74 each).
+  assert.ok(
+    counts.every((n) => n > 40 && n < 110),
+    counts.join(","),
+  );
+});
+
+test("motion uses a few shared animations, not one per flower", () => {
+  const svg = generateMeadowSVG(generateSampleContributions());
+  const swayGroups = svg.match(/<g class="sw\d">/g) ?? [];
+  const pulseGroups = svg.match(/<g class="pl\d">/g) ?? [];
+  assert.equal(swayGroups.length, SWAY_GROUPS);
+  assert.equal(pulseGroups.length, PULSE_GROUPS);
+  assert.ok(!/<use[^>]*class=/.test(svg));
+});
+
+test("every flower head is drawn inside a sway group, stems stay static", () => {
+  const svg = generateMeadowSVG(generateSampleContributions());
+  const swayHeads = [...svg.matchAll(/<g class="sw\d">(.*?)<\/g>/gs)].flatMap(
+    (m) => m[1].match(/<use/g) ?? [],
+  );
+  const flowers = generateSampleContributions()
+    .flat()
+    .filter((n) => n > 0).length;
+  assert.equal(swayHeads.length, flowers);
+});
+
+test("flower motion respects reduced motion", () => {
+  assert.match(motionCss(), /prefers-reduced-motion:reduce\)\{\.sw0/);
+});

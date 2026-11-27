@@ -3,6 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SPRITES, PALETTES, BUD, LEAVES } from "./sprites.js";
 import { renderFireflies } from "./fireflies.js";
+import { renderButterfly } from "./butterfly.js";
+import {
+  motionCss,
+  swayGroupFor,
+  pulseGroupFor,
+  SWAY_GROUPS,
+  PULSE_GROUPS,
+} from "./flower-motion.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -70,11 +78,23 @@ function buildDefs() {
   const defs = [];
   const leafPalette = PALETTES[3];
 
-  defs.push(`<g id="bud">${rowsToPaths(BUD, leafPalette)}</g>`);
+  // Bud: head (bloom + sepals) sways, the stem stays put.
+  const BUD_HEAD_ROWS = 4;
+  defs.push(
+    `<g id="budhead">${rowsToPaths(BUD.slice(0, BUD_HEAD_ROWS), leafPalette)}</g>`,
+  );
+  defs.push(
+    `<g id="budstem">${rowsToPaths(BUD.slice(BUD_HEAD_ROWS), leafPalette)}</g>`,
+  );
+
   for (const [lvl, spec] of Object.entries(LEVEL_SPRITES)) {
     if (spec.kind !== "hibiscus") continue;
-    const rows = compose(SPRITES[spec.size], LEAVES[spec.leaves], spec.size);
-    defs.push(`<g id="h${lvl}">${rowsToPaths(rows, PALETTES[lvl])}</g>`);
+    defs.push(
+      `<g id="h${lvl}">${rowsToPaths(SPRITES[spec.size], PALETTES[lvl])}</g>`,
+    );
+    defs.push(
+      `<g id="lv${lvl}">${rowsToPaths(compose([], LEAVES[spec.leaves], spec.size), PALETTES[lvl])}</g>`,
+    );
   }
   // Grass tufts for empty days (three deterministic variants).
   const tufts = [
@@ -90,37 +110,51 @@ function buildDefs() {
   return defs.join("\n");
 }
 
-function placeCell(col, row, level) {
+// Layers collected while placing cells, so each animated layer is one <g>.
+function createLayers() {
+  return {
+    halos: Array.from({ length: PULSE_GROUPS }, () => []),
+    base: [], // grass, stems and leaves (never animated)
+    heads: Array.from({ length: SWAY_GROUPS }, () => []),
+  };
+}
+
+function placeCell(layers, col, row, level) {
   const cellX = PADDING + col * PITCH;
   const cellY = PADDING + row * PITCH;
   if (level === 0) {
     const v = (col * 3 + row * 7) % 3;
-    return `<use href="#grass${v}" x="${cellX + 8}" y="${cellY + 10}"/>`;
+    layers.base.push(
+      `<use href="#grass${v}" x="${cellX + 8}" y="${cellY + 10}"/>`,
+    );
+    return;
   }
+
   const spec = LEVEL_SPRITES[level];
-  let w, h, id;
-  if (spec.kind === "bud") {
-    w = 5 * PX;
-    h = BUD.length * PX;
-    id = "bud";
-  } else {
-    const lh = LEAVES[spec.leaves].length;
-    w = spec.size * PX;
-    h = (spec.size + lh) * PX;
-    id = `h${level}`;
-  }
+  const isBud = spec.kind === "bud";
+  const headRows = isBud ? 4 : spec.size;
+  const lowerRows = isBud ? BUD.length - headRows : LEAVES[spec.leaves].length;
+  const w = (isBud ? 5 : spec.size) * PX;
+  const h = (headRows + lowerRows) * PX;
   const x = cellX + Math.round((CELL - w) / 2 / PX) * PX;
   const y = cellY + Math.round((CELL - h) / 2 / PX) * PX;
-  let glow = "";
+
   if (level >= 3) {
-    const cx = x + w / 2,
-      cy = y + (spec.size * PX) / 2;
+    const cx = x + w / 2;
+    const cy = y + (headRows * PX) / 2;
     const r = level === 4 ? 13 : 10;
-    glow =
+    layers.halos[pulseGroupFor(col, row)].push(
       `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#FFB3CF" opacity="${level === 4 ? 0.12 : 0.07}"/>` +
-      `<circle cx="${cx}" cy="${cy}" r="${r - 4}" fill="#FFB3CF" opacity="${level === 4 ? 0.14 : 0.08}"/>`;
+        `<circle cx="${cx}" cy="${cy}" r="${r - 4}" fill="#FFB3CF" opacity="${level === 4 ? 0.14 : 0.08}"/>`,
+    );
   }
-  return `${glow}<use href="#${id}" x="${x}" y="${y}"/>`;
+
+  layers.base.push(
+    `<use href="#${isBud ? "budstem" : `lv${level}`}" x="${x}" y="${y + headRows * PX}"/>`,
+  );
+  layers.heads[swayGroupFor(col, row)].push(
+    `<use href="#${isBud ? "budhead" : `h${level}`}" x="${x}" y="${y}"/>`,
+  );
 }
 
 export function getContributionLevel(count) {
@@ -147,13 +181,17 @@ export function generateSampleContributions() {
 }
 
 export function generateMeadowSVG(contributions) {
-  const cells = contributions
-    .map((week, col) =>
-      week
-        .map((n, row) => placeCell(col, row, getContributionLevel(n)))
-        .join(""),
-    )
-    .join("\n");
+  const layers = createLayers();
+  contributions.forEach((week, col) =>
+    week.forEach((n, row) =>
+      placeCell(layers, col, row, getContributionLevel(n)),
+    ),
+  );
+  const cells = [
+    ...layers.halos.map((g, i) => `<g class="pl${i}">${g.join("")}</g>`),
+    `<g>${layers.base.join("")}</g>`,
+    ...layers.heads.map((g, i) => `<g class="sw${i}">${g.join("")}</g>`),
+  ].join("\n");
 
   const fireflies = renderFireflies({
     width: SVG_WIDTH,
@@ -162,17 +200,25 @@ export function generateMeadowSVG(contributions) {
     count: FIREFLY_COUNT,
   });
 
+  const butterfly = renderButterfly({
+    width: SVG_WIDTH,
+    height: SVG_HEIGHT,
+    padding: PADDING,
+  });
+
   return `<svg xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" width="${SVG_WIDTH}" height="${SVG_HEIGHT}" viewBox="0 0 ${SVG_WIDTH} ${SVG_HEIGHT}" role="img" aria-label="A pixel-art flower meadow representing GitHub contributions">
 <defs>
 <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#15152B"/><stop offset="1" stop-color="#241F3F"/></linearGradient>
 ${buildDefs()}
 </defs>
 <style>
+${motionCss()}
 ${fireflies.css}
+${butterfly.css}
 </style>
 <rect width="${SVG_WIDTH}" height="${SVG_HEIGHT}" rx="12" fill="url(#sky)"/>
 ${cells}
-${fireflies.svg}</svg>
+${fireflies.svg}${butterfly.svg}</svg>
 `;
 }
 
